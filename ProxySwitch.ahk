@@ -37,7 +37,7 @@ ColorDark      := "333333"
 TotalWidth   := CmderWidth + (ButtonWidth * 2)
 
 ; 窗口位置（右下角）
-PosX := A_ScreenWidth - TotalWidth - 280
+PosX := 0
 PosY := A_ScreenHeight - 48
 ; -------------------------------------
 
