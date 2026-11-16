@@ -18,6 +18,7 @@ global GoldRequest, GoldRefreshing := false, GoldRequestStarted := 0
 global GoldLastError := ""
 global TunStatus := 0
 global CurrentNode := ""
+global BarHidden := false            ; 全屏时整条栏是否已隐藏
 
 ; 尝试允许拖拽消息穿透
 DllCall("ChangeWindowMessageFilter", "UInt", 0x233, "UInt", 1)
@@ -51,6 +52,8 @@ PosX := 0
 PosY := A_ScreenHeight - 48
 
 ; ================= GUI 创建 =================
+; 工具栏正好压在任务栏那条 48px 上：必须置顶，否则会被任务栏压住、点不到；
+; 全屏页面（F11 / 全屏视频 / 全屏游戏）出现时由 UpdateBarVisibility 整条隐藏。
 MyGui := Gui("+AlwaysOnTop -Caption +ToolWindow +LastFound -DPIScale +E0x08000000")
 MyGui.BackColor := ColorDark
 MyGui.SetFont("s8 bold cWhite", "Segoe UI")
@@ -137,8 +140,8 @@ BtnGoldRefresh.OnEvent("Click", OnGoldRefreshClick)
 ; ================= 显示窗口 =================
 MyGui.Show(Format("w{} h{} x{} y{} NoActivate", TotalWidth, TotalHeight, PosX, PosY))
 
-; 定时检查状态
-SetTimer CheckState, 1000
+; 定时检查状态（顺便决定整条栏是否要让位给全屏页面）
+SetTimer CheckState, 500
 CheckState()
 
 ; 积存金价格：每10秒刷新
@@ -408,9 +411,10 @@ UpdateCtrlColor(ctrl) {
 
 ; ================= 状态检查 =================
 CheckState() {
-    global MyGui, BtnProxy, ColorDark
+    global BtnProxy, ColorDark
 
-    try WinSetAlwaysOnTop(1, "ahk_id " MyGui.Hwnd)
+    ; 先决定层级 / 是否隐藏，再刷新状态
+    UpdateBarVisibility()
 
     ; 检查系统代理状态
     try {
@@ -431,6 +435,83 @@ CheckState() {
     UpdateTunUI()
     UpdateNodeUI()
 }
+
+; ================= 窗口层级与全屏隐藏 =================
+; 工具栏压在任务栏那条 48px 上，必须置顶才看得见、点得到；
+; 但 F11 页面 / 全屏视频 / 全屏游戏出现时要把整条栏藏起来，不能压住全屏内容。
+
+UpdateBarVisibility() {
+    global MyGui, BarHidden
+
+    if IsFullscreenForeground() {
+        if !BarHidden {
+            BarHidden := true
+            try WinHide("ahk_id " MyGui.Hwnd)
+        }
+        return
+    }
+
+    if BarHidden {
+        BarHidden := false
+        try WinShow("ahk_id " MyGui.Hwnd)
+    }
+
+    ; 持续校正置顶：任务栏、播放器等也置顶，不校正就会被压住点不到
+    try WinSetAlwaysOnTop(1, "ahk_id " MyGui.Hwnd)
+}
+
+; 前台是否处于全屏
+IsFullscreenForeground() {
+    ; Shell 的通知状态直接反映前台全屏：
+    ; QUNS_BUSY(2) / QUNS_RUNNING_D3D_FULL_SCREEN(3) / QUNS_PRESENTATION_MODE(4)
+    state := 0
+    hr := -1
+    try hr := DllCall("shell32\SHQueryUserNotificationState", "int*", &state, "int")
+
+    if (hr = 0) {
+        if (state = 3)                      ; 独占全屏（D3D）：系统层面必定是全屏
+            return true
+        if (state = 2 || state = 4)         ; 普通全屏 / 演示模式：再确认前台窗口确实铺满屏幕
+            return IsForegroundWindowFullscreen()
+        return false                        ; QUNS_ACCEPTS_NOTIFICATIONS 等按非全屏处理
+    }
+
+    ; 系统接口不可用时退回窗口几何判断
+    return IsForegroundWindowFullscreen()
+}
+
+; 前台窗口是否铺满整块屏幕（最大化窗口只铺满工作区，不算）
+IsForegroundWindowFullscreen() {
+    global MyGui
+
+    hwnd := DllCall("GetForegroundWindow", "ptr")
+    if !hwnd || (hwnd = MyGui.Hwnd)
+        return false
+
+    if !DllCall("IsWindowVisible", "ptr", hwnd)
+        return false
+
+    ; 只处理与整体栏同一显示器上的全屏页面
+    pageMon := DllCall("MonitorFromWindow", "ptr", hwnd, "uint", 2, "ptr")
+    barMon := DllCall("MonitorFromWindow", "ptr", MyGui.Hwnd, "uint", 2, "ptr")
+    if (pageMon != barMon)
+        return false
+
+    ; 桌面、任务栏本身不是全屏页面
+    try cls := WinGetClass("ahk_id " hwnd)
+    catch
+        return false
+    if (cls = "Progman" || cls = "WorkerW" || cls = "Shell_TrayWnd")
+        return false
+
+    try WinGetPos(&x, &y, &w, &h, "ahk_id " hwnd)
+    catch
+        return false
+
+    ; 盖住整个屏幕（含任务栏区域）才算全屏；只铺满工作区的大窗口不算
+    return (x <= 0 && y <= 0 && w >= A_ScreenWidth && h >= A_ScreenHeight)
+}
+
 
 UpdateTunUI() {
     global TunStatus, ColorDark, BtnTun
