@@ -1,4 +1,3 @@
-
 #Requires AutoHotkey v2.0
 #SingleInstance Force
 
@@ -18,7 +17,7 @@ global GoldRequest, GoldRefreshing := false, GoldRequestStarted := 0
 global GoldLastError := ""
 global TunStatus := 0
 global CurrentNode := ""
-global BarHidden := false            ; 全屏时整条栏是否已隐藏
+global BarHidden := false
 
 ; 尝试允许拖拽消息穿透
 DllCall("ChangeWindowMessageFilter", "UInt", 0x233, "UInt", 1)
@@ -52,13 +51,10 @@ PosX := 0
 PosY := A_ScreenHeight - 48
 
 ; ================= GUI 创建 =================
-; 工具栏正好压在任务栏那条 48px 上：必须置顶，否则会被任务栏压住、点不到；
-; 全屏页面（F11 / 全屏视频 / 全屏游戏）出现时由 UpdateBarVisibility 整条隐藏。
 MyGui := Gui("+AlwaysOnTop -Caption +ToolWindow +LastFound -DPIScale +E0x08000000")
 MyGui.BackColor := ColorDark
 MyGui.SetFont("s8 bold cWhite", "Segoe UI")
 
-; 开启拖拽文件支持
 MyGui.OnEvent("DropFiles", OnFilesDropped)
 
 ; ================= Cmder 区域 =================
@@ -111,7 +107,6 @@ BtnTun.OnEvent("Click", OnTunClick)
 ; ================= 积存金价格区域 =================
 GoldX := CmderWidth + ButtonWidth * 2
 
-; 第一行：价格
 BtnGoldPrice := MyGui.Add(
     "Text",
     Format("x{} y0 w{} h30 Center 0x200 Background{} cWhite", GoldX, GoldWidth, ColorGoldBg),
@@ -119,7 +114,6 @@ BtnGoldPrice := MyGui.Add(
 )
 BtnGoldPrice.SetFont("s11 bold", "Segoe UI")
 
-; 第二行：单位
 BtnGoldUnit := MyGui.Add(
     "Text",
     Format("x{} y30 w{} h20 Center 0x200 Background{} cWhite", GoldX, GoldWidth, ColorGoldBg),
@@ -127,7 +121,7 @@ BtnGoldUnit := MyGui.Add(
 )
 BtnGoldUnit.SetFont("s7", "Segoe UI")
 
-; ================= 黄金价格刷新按钮 =================
+; ================= 刷新按钮 =================
 BtnGoldRefresh := MyGui.Add(
     "Text",
     Format("x{} y0 w{} h{} Center 0x200 Background{} cWhite",
@@ -140,7 +134,6 @@ BtnGoldRefresh.OnEvent("Click", OnGoldRefreshClick)
 ; ================= 显示窗口 =================
 MyGui.Show(Format("w{} h{} x{} y{} NoActivate", TotalWidth, TotalHeight, PosX, PosY))
 
-; 定时检查状态（顺便决定整条栏是否要让位给全屏页面）
 SetTimer CheckState, 500
 CheckState()
 
@@ -150,7 +143,6 @@ SetTimer RefreshGoldPrice, 10000
 ; 启动时立即获取一次
 RefreshGoldPrice()
 
-; 允许按住左键拖动窗口
 OnMessage(0x0201, WM_LBUTTONDOWN)
 return
 
@@ -181,7 +173,6 @@ RunCmder(path := "") {
     }
 }
 
-; 处理拖拽文件事件
 OnFilesDropped(GuiObj, GuiCtrlObj, FileArray, X, Y) {
     global CmderWidth
 
@@ -221,9 +212,8 @@ OnTunClick(*) {
 }
 
 
-; ================= 黄金价格获取 =================
+; ================= 黄金价格获取（浙商积存金） =================
 
-; 手动刷新按钮
 OnGoldRefreshClick(*) {
     global BtnGoldRefresh
 
@@ -231,11 +221,9 @@ OnGoldRefreshClick(*) {
     RefreshGoldPrice()
 }
 
-; 发起异步请求
 RefreshGoldPrice() {
     global GoldRefreshing, GoldRequest, GoldRequestStarted
 
-    ; 防止重复请求
     if GoldRefreshing {
         return
     }
@@ -244,29 +232,21 @@ RefreshGoldPrice() {
 
     try {
         GoldRequest := ComObject("WinHttp.WinHttpRequest.5.1")
-
-        ; 设置超时时间：DNS、连接、发送、接收
         GoldRequest.SetTimeouts(5000, 5000, 5000, 5000)
 
-        GoldRequest.Open(
-            "POST",
-            "https://mybank.icbc.com.cn/servlet/AsynGetDataServlet",
-            true
-        )
+        ; 京东金融浙商积存金接口，GET 方式，productSku 指定浙商产品
+        url := "https://api.jdjygold.com/gw2/generic/jrm/h5/m/stdLatestPrice?productSku=1961543816"
 
-        GoldRequest.SetRequestHeader(
-            "Content-Type",
-            "application/x-www-form-urlencoded; charset=UTF-8"
-        )
+        GoldRequest.Open("GET", url, true)
 
-        GoldRequest.SetRequestHeader(
-            "Accept",
-            "application/json, text/javascript, */*; q=0.01"
-        )
+        ; 加移动端 UA，避免被拦截
+        GoldRequest.SetRequestHeader("User-Agent",
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+            . "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1")
+        GoldRequest.SetRequestHeader("Accept", "application/json, text/javascript, */*; q=0.01")
 
-        ; WinHttpRequest 不支持 ComObjConnect，使用零等待轮询检查异步结果。
         GoldRequestStarted := A_TickCount
-        GoldRequest.Send("tranCode=A00622")
+        GoldRequest.Send()
         SetTimer PollGoldRequest, 100
 
     } catch as e {
@@ -274,7 +254,6 @@ RefreshGoldPrice() {
     }
 }
 
-; WaitForResponse(0) 立即返回，避免等待网络时阻塞 GUI。
 PollGoldRequest() {
     global GoldRequest, GoldRefreshing, GoldRequestStarted
 
@@ -295,7 +274,6 @@ PollGoldRequest() {
     }
 }
 
-; HTTP 请求完成后解析行情
 GoldHttp_OnResponseFinished(*) {
     global GoldRequest
 
@@ -313,25 +291,22 @@ GoldHttp_OnResponseFinished(*) {
 
         response := GoldRequest.ResponseText
 
-        ; 优先匹配 ProductName = 积存金 的记录
-        pattern := 's)\{(?=[^{}]*"ProductName"\s*:\s*"积存金")(?=[^{}]*"ActivePrice"\s*:\s*"?([0-9]+(?:\.[0-9]+)?))[^{}]*\}'
-
-        if !RegExMatch(response, pattern, &match) {
-            ; 备用匹配：通过产品代码定位
-            pattern := 's)\{(?=[^{}]*"proCode"\s*:\s*"?080020000521"?)(?=[^{}]*"ActivePrice"\s*:\s*"?([0-9]+(?:\.[0-9]+)?))[^{}]*\}'
-
-            if !RegExMatch(response, pattern, &match) {
-                ; 尝试读取工行接口错误信息
-                if RegExMatch(response, '"TranErrorDisplayMsg"\s*:\s*"([^"]*)"', &errMatch) {
-                    FinishGoldRequest("工行接口：" errMatch[1])
-                } else {
-                    FinishGoldRequest("未找到有效的主动积存价格")
-                }
-                return
+        ; 京东金融返回结构：resultData.datas.price
+        ; 例如：{"resultData":{"datas":{"price":"1148.57",...}}}
+        if RegExMatch(response, 's)"price"\s*:\s*"([0-9]+(?:\.[0-9]+)?)"', &match) {
+            price := match[1]
+        } else if RegExMatch(response, 's)"price"\s*:\s*([0-9]+(?:\.[0-9]+)?)', &match) {
+            ; 兼容 price 为数字类型（非字符串）的情况
+            price := match[1]
+        } else {
+            ; 尝试读取接口错误信息
+            if RegExMatch(response, '"resultMsg"\s*:\s*"([^"]*)"', &errMatch) {
+                FinishGoldRequest("京东金融接口：" errMatch[1])
+            } else {
+                FinishGoldRequest("未找到浙商积存金价格")
             }
+            return
         }
-
-        price := match[1]
 
         if (Number(price) <= 0) {
             FinishGoldRequest("价格数据无效")
@@ -345,13 +320,11 @@ GoldHttp_OnResponseFinished(*) {
     }
 }
 
-; 统一处理请求完成
 FinishGoldRequest(errorMessage := "", price := "") {
     global GoldRequest, GoldRefreshing, BtnGoldPrice, BtnGoldUnit, GoldLastError
 
     SetTimer PollGoldRequest, 0
 
-    ; 更新价格
     if (price != "") {
         BtnGoldPrice.Value := Format("{:.2f}", Number(price))
         BtnGoldPrice.Redraw()
@@ -359,11 +332,9 @@ FinishGoldRequest(errorMessage := "", price := "") {
         GoldLastError := ""
     }
 
-    ; 失败时保留上一次成功价格，同时标记数据可能已过期。
     if (errorMessage != "") {
         BtnGoldUnit.Value := "获取失败"
-        OutputDebug("[工行积存金] " errorMessage)
-        ; 相同错误只记录一次，避免每 10 秒重复写日志。
+        OutputDebug("[浙商积存金] " errorMessage)
         if (errorMessage != GoldLastError) {
             try FileAppend(FormatTime(, "yyyy-MM-dd HH:mm:ss") " " errorMessage "`n",
                 A_ScriptDir "\gold-price.log", "UTF-8")
@@ -388,7 +359,6 @@ Flash(ctrl) {
     SetTimer(() => (UpdateCtrlColor(ctrl)), -150)
 }
 
-; 恢复控件颜色
 UpdateCtrlColor(ctrl) {
     global ColorCmderBg, ColorCmderText
     global BtnCmder, BtnProxy, BtnTun, BtnNode16, BtnNode22
@@ -413,10 +383,8 @@ UpdateCtrlColor(ctrl) {
 CheckState() {
     global BtnProxy, ColorDark
 
-    ; 先决定层级 / 是否隐藏，再刷新状态
     UpdateBarVisibility()
 
-    ; 检查系统代理状态
     try {
         enabled := RegRead(
             "HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Internet Settings",
@@ -437,9 +405,6 @@ CheckState() {
 }
 
 ; ================= 窗口层级与全屏隐藏 =================
-; 工具栏压在任务栏那条 48px 上，必须置顶才看得见、点得到；
-; 但 F11 页面 / 全屏视频 / 全屏游戏出现时要把整条栏藏起来，不能压住全屏内容。
-
 UpdateBarVisibility() {
     global MyGui, BarHidden
 
@@ -456,31 +421,25 @@ UpdateBarVisibility() {
         try WinShow("ahk_id " MyGui.Hwnd)
     }
 
-    ; 持续校正置顶：任务栏、播放器等也置顶，不校正就会被压住点不到
     try WinSetAlwaysOnTop(1, "ahk_id " MyGui.Hwnd)
 }
 
-; 前台是否处于全屏
 IsFullscreenForeground() {
-    ; Shell 的通知状态直接反映前台全屏：
-    ; QUNS_BUSY(2) / QUNS_RUNNING_D3D_FULL_SCREEN(3) / QUNS_PRESENTATION_MODE(4)
     state := 0
     hr := -1
     try hr := DllCall("shell32\SHQueryUserNotificationState", "int*", &state, "int")
 
     if (hr = 0) {
-        if (state = 3)                      ; 独占全屏（D3D）：系统层面必定是全屏
+        if (state = 3)
             return true
-        if (state = 2 || state = 4)         ; 普通全屏 / 演示模式：再确认前台窗口确实铺满屏幕
+        if (state = 2 || state = 4)
             return IsForegroundWindowFullscreen()
-        return false                        ; QUNS_ACCEPTS_NOTIFICATIONS 等按非全屏处理
+        return false
     }
 
-    ; 系统接口不可用时退回窗口几何判断
     return IsForegroundWindowFullscreen()
 }
 
-; 前台窗口是否铺满整块屏幕（最大化窗口只铺满工作区，不算）
 IsForegroundWindowFullscreen() {
     global MyGui
 
@@ -491,13 +450,11 @@ IsForegroundWindowFullscreen() {
     if !DllCall("IsWindowVisible", "ptr", hwnd)
         return false
 
-    ; 只处理与整体栏同一显示器上的全屏页面
     pageMon := DllCall("MonitorFromWindow", "ptr", hwnd, "uint", 2, "ptr")
     barMon := DllCall("MonitorFromWindow", "ptr", MyGui.Hwnd, "uint", 2, "ptr")
     if (pageMon != barMon)
         return false
 
-    ; 桌面、任务栏本身不是全屏页面
     try cls := WinGetClass("ahk_id " hwnd)
     catch
         return false
@@ -508,7 +465,6 @@ IsForegroundWindowFullscreen() {
     catch
         return false
 
-    ; 盖住整个屏幕（含任务栏区域）才算全屏；只铺满工作区的大窗口不算
     return (x <= 0 && y <= 0 && w >= A_ScreenWidth && h >= A_ScreenHeight)
 }
 
